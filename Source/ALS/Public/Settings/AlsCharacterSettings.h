@@ -5,7 +5,6 @@
 #include "AlsRagdollingSettings.h"
 #include "AlsRollingSettings.h"
 #include "AlsViewSettings.h"
-#include "Engine/DataAsset.h"
 #include "AlsCharacterSettings.generated.h"
 
 UCLASS(Blueprintable, BlueprintType)
@@ -28,6 +27,11 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Settings")
 	bool bAllowAimingWhenInAir{true};
+
+	// If enabled, the character will rotate relative to the object it is standing on in the velocity
+	// direction rotation mode, otherwise the character will ignore that object and keep its world rotation.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Settings")
+	bool bInheritMovementBaseRotationInVelocityDirectionRotationMode;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Settings")
 	FAlsViewSettings View;

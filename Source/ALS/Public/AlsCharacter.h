@@ -1,9 +1,9 @@
 #pragma once
 
-#include "GameplayTagContainer.h"
 #include "GameFramework/Character.h"
 #include "Settings/AlsMantlingSettings.h"
 #include "State/AlsLocomotionState.h"
+#include "State/AlsMovementBaseState.h"
 #include "State/AlsRagdollingState.h"
 #include "State/AlsRollingState.h"
 #include "State/AlsViewState.h"
@@ -21,7 +21,7 @@ class ALS_API AAlsCharacter : public ACharacter
 	GENERATED_BODY()
 
 protected:
-	UPROPERTY(VisibleDefaultsOnly, BlueprintReadOnly, Category = "Als Character")
+	UPROPERTY(BlueprintReadOnly, Category = "Als Character")
 	TObjectPtr<UAlsCharacterMovementComponent> AlsCharacterMovement;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Settings|Als Character")
@@ -50,9 +50,6 @@ protected:
 		ReplicatedUsing = "OnReplicated_OverlayMode")
 	FGameplayTag OverlayMode{AlsOverlayModeTags::Default};
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State|Als Character", Transient)
-	bool bSimulatedProxyTeleported;
-
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State|Als Character", Transient, Meta = (ShowInnerProperties))
 	TWeakObjectPtr<UAlsAnimationInstance> AnimationInstance;
 
@@ -71,10 +68,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State|Als Character", Transient)
 	FGameplayTag LocomotionAction;
 
-	// Raw replicated view rotation. For smooth rotation use FAlsViewState::Rotation.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State|Als Character", Transient)
+	FAlsMovementBaseState MovementBase;
+
+	// Replicated raw view rotation. In most cases, it's better to use FAlsViewState::Rotation to take advantage of network smoothing.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State|Als Character", Transient,
-		ReplicatedUsing = "OnReplicated_RawViewRotation")
-	FRotator RawViewRotation;
+		ReplicatedUsing = "OnReplicated_ReplicatedViewRotation")
+	FRotator ReplicatedViewRotation;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State|Als Character", Transient)
 	FAlsViewState ViewState;
@@ -127,10 +127,11 @@ public:
 	virtual void Restart() override;
 
 private:
+	void RefreshUsingAbsoluteRotation() const;
+
 	void RefreshVisibilityBasedAnimTickOption() const;
 
-public:
-	bool IsSimulatedProxyTeleported() const;
+	void RefreshMovementBase();
 
 	// View Mode
 
@@ -311,13 +312,13 @@ public:
 	virtual FRotator GetViewRotation() const override;
 
 private:
-	void SetRawViewRotation(const FRotator& NewViewRotation);
+	void SetReplicatedViewRotation(const FRotator& NewViewRotation);
 
 	UFUNCTION(Server, Unreliable)
-	void ServerSetRawViewRotation(const FRotator& NewViewRotation);
+	void ServerSetReplicatedViewRotation(const FRotator& NewViewRotation);
 
 	UFUNCTION()
-	void OnReplicated_RawViewRotation();
+	void OnReplicated_ReplicatedViewRotation();
 
 public:
 	void CorrectViewNetworkSmoothing(const FRotator& NewViewRotation);
@@ -340,9 +341,13 @@ public:
 private:
 	void SetInputDirection(FVector NewInputDirection);
 
-	void RefreshLocomotionLocationAndRotation(float DeltaTime);
+	void RefreshLocomotionLocationAndRotation();
+
+	void RefreshLocomotionEarly();
 
 	void RefreshLocomotion(float DeltaTime);
+
+	void RefreshLocomotionLate(float DeltaTime);
 
 	// Jumping
 
@@ -360,7 +365,7 @@ private:
 	// Rotation
 
 public:
-	virtual void FaceRotation(FRotator NewRotation, float DeltaTime) override final;
+	virtual void FaceRotation(FRotator Rotation, float DeltaTime) override final;
 
 	void CharacterMovement_OnPhysicsRotation(float DeltaTime);
 
@@ -400,22 +405,6 @@ protected:
 	void RefreshTargetYawAngle(float TargetYawAngle);
 
 	void RefreshViewRelativeTargetYawAngle();
-
-	// Rotation Lock
-
-public:
-	UFUNCTION(BlueprintCallable, Category = "ALS|Als Character")
-	void LockRotation(float TargetYawAngle);
-
-	UFUNCTION(BlueprintCallable, Category = "ALS|Als Character")
-	void UnLockRotation();
-
-private:
-	UFUNCTION(NetMulticast, Reliable)
-	void MulticastLockRotation(float TargetYawAngle);
-
-	UFUNCTION(NetMulticast, Reliable)
-	void MulticastUnLockRotation();
 
 	// Rolling
 
@@ -556,11 +545,6 @@ private:
 
 	void DisplayDebugMantling(const UCanvas* Canvas, float Scale, float HorizontalLocation, float& VerticalLocation) const;
 };
-
-inline bool AAlsCharacter::IsSimulatedProxyTeleported() const
-{
-	return bSimulatedProxyTeleported;
-}
 
 inline const FGameplayTag& AAlsCharacter::GetViewMode() const
 {

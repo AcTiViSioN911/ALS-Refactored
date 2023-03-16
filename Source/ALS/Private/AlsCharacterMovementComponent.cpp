@@ -7,6 +7,8 @@
 #include "GameFramework/Controller.h"
 #include "Utility/AlsMacros.h"
 
+#include UE_INLINE_GENERATED_CPP_BY_NAME(AlsCharacterMovementComponent)
+
 void FAlsCharacterNetworkMoveData::ClientFillNetworkMoveData(const FSavedMove_Character& Move, const ENetworkMoveType MoveType)
 {
 	Super::ClientFillNetworkMoveData(Move, MoveType);
@@ -73,15 +75,22 @@ bool FAlsSavedMove::CanCombineWith(const FSavedMovePtr& NewMovePtr, ACharacter* 
 void FAlsSavedMove::CombineWith(const FSavedMove_Character* PreviousMove, ACharacter* Character,
                                 APlayerController* Player, const FVector& PreviousStartLocation)
 {
-	const auto* Movement{Character->GetCharacterMovement()};
-	const auto InitialRotation{Movement->UpdatedComponent->GetComponentRotation()};
+	// Calling Super::CombineWith() will force change the character's rotation to the rotation from the previous move, which is
+	// undesirable because it will erase our rotation changes made in the AAlsCharacter class. So, to keep the rotation unchanged,
+	// we simply override the saved rotations with the current rotation, and after calling Super::CombineWith() we restore them.
+
+	const auto OriginalRotation{PreviousMove->StartRotation};
+	const auto OriginalRelativeRotation{PreviousMove->StartAttachRelativeRotation};
+
+	const auto* UpdatedComponent{Character->GetCharacterMovement()->UpdatedComponent.Get()};
+
+	const_cast<FSavedMove_Character*>(PreviousMove)->StartRotation = UpdatedComponent->GetComponentRotation();
+	const_cast<FSavedMove_Character*>(PreviousMove)->StartAttachRelativeRotation = UpdatedComponent->GetRelativeRotation();
 
 	Super::CombineWith(PreviousMove, Character, Player, PreviousStartLocation);
 
-	// Restore initial rotation after movement combining. Without this, any rotation applied in
-	// the character class will be discarded and the character will not be able to rotate properly.
-
-	Movement->UpdatedComponent->SetWorldRotation(InitialRotation, false, nullptr, Movement->GetTeleportType());
+	const_cast<FSavedMove_Character*>(PreviousMove)->StartRotation = OriginalRotation;
+	const_cast<FSavedMove_Character*>(PreviousMove)->StartAttachRelativeRotation = OriginalRelativeRotation;
 }
 
 void FAlsSavedMove::PrepMoveFor(ACharacter* Character)
@@ -137,7 +146,7 @@ UAlsCharacterMovementComponent::UAlsCharacterMovementComponent()
 	FallingLateralFriction = 1.0f;
 	JumpOffJumpZFactor = 0.0f;
 
-	bNetworkAlwaysReplicateTransformUpdateTimestamp = true; // Required for view interpolation.
+	bNetworkAlwaysReplicateTransformUpdateTimestamp = true; // Required for view network smoothing.
 
 	RotationRate = FRotator::ZeroRotator;
 	bUseControllerDesiredRotation = false;
@@ -154,7 +163,6 @@ UAlsCharacterMovementComponent::UAlsCharacterMovementComponent()
 bool UAlsCharacterMovementComponent::CanEditChange(const FProperty* Property) const
 {
 	return Super::CanEditChange(Property) &&
-	       Property->GetFName() != GET_MEMBER_NAME_CHECKED(ThisClass, bIgnoreBaseRotation) &&
 	       Property->GetFName() != GET_MEMBER_NAME_CHECKED(ThisClass, RotationRate) &&
 	       Property->GetFName() != GET_MEMBER_NAME_CHECKED(ThisClass, bUseControllerDesiredRotation) &&
 	       Property->GetFName() != GET_MEMBER_NAME_CHECKED(ThisClass, bOrientRotationToMovement);
@@ -163,8 +171,6 @@ bool UAlsCharacterMovementComponent::CanEditChange(const FProperty* Property) co
 
 void UAlsCharacterMovementComponent::BeginPlay()
 {
-	ALS_ENSURE_MESSAGE(bIgnoreBaseRotation, TEXT("Non-ignored base rotation is not supported."));
-
 	ALS_ENSURE_MESSAGE(!bUseControllerDesiredRotation && !bOrientRotationToMovement,
 	                   TEXT("These settings are not allowed and must be turned off!"));
 
@@ -187,6 +193,32 @@ void UAlsCharacterMovementComponent::OnMovementModeChanged(const EMovementMode P
 	// character automatically uncrouches at the end of the roll in the air.
 
 	bCrouchMaintainsBaseLocation = true;
+}
+
+void UAlsCharacterMovementComponent::UpdateBasedRotation(FRotator& FinalRotation, const FRotator& ReducedRotation)
+{
+	// Ignore the parent implementation of this function and provide our own, because the parent
+	// implementation has no effect when we ignore rotation changes in AAlsCharacter::FaceRotation().
+
+	const auto& BasedMovement{CharacterOwner->GetBasedMovement()};
+
+	FVector MovementBaseLocation;
+	FQuat MovementBaseRotation;
+
+	MovementBaseUtility::GetMovementBaseTransform(BasedMovement.MovementBase, BasedMovement.BoneName,
+	                                              MovementBaseLocation, MovementBaseRotation);
+
+	if (!OldBaseQuat.Equals(MovementBaseRotation, UE_SMALL_NUMBER))
+	{
+		const auto DeltaRotation{(MovementBaseRotation * OldBaseQuat.Inverse()).Rotator()};
+		auto NewControlRotation{CharacterOwner->Controller->GetControlRotation()};
+
+		NewControlRotation.Pitch += DeltaRotation.Pitch;
+		NewControlRotation.Yaw += DeltaRotation.Yaw;
+		NewControlRotation.Normalize();
+
+		CharacterOwner->Controller->SetControlRotation(NewControlRotation);
+	}
 }
 
 float UAlsCharacterMovementComponent::GetMaxAcceleration() const
@@ -243,7 +275,6 @@ void UAlsCharacterMovementComponent::PhysWalking(const float DeltaTime, int32 It
 	// ReSharper disable All
 
 	// SCOPE_CYCLE_COUNTER(STAT_CharPhysWalking);
-	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(CharPhysWalking);
 
 	if (DeltaTime < MIN_TICK_TIME)
 	{
@@ -328,7 +359,7 @@ void UAlsCharacterMovementComponent::PhysWalking(const float DeltaTime, int32 It
 			{
 				// pawn decided to jump up
 				const float DesiredDist = Delta.Size();
-				if (DesiredDist > KINDA_SMALL_NUMBER)
+				if (DesiredDist > UE_KINDA_SMALL_NUMBER)
 				{
 					const float ActualDist = (UpdatedComponent->GetComponentLocation() - OldLocation).Size2D();
 					remainingTime += timeTick * (1.f - FMath::Min(1.f,ActualDist/DesiredDist));
@@ -547,22 +578,23 @@ FNetworkPredictionData_Client* UAlsCharacterMovementComponent::GetPredictionData
 
 void UAlsCharacterMovementComponent::SmoothClientPosition(const float DeltaTime)
 {
-	auto* Mesh{HasValidData() ? CharacterOwner->GetMesh() : nullptr};
+	auto* PredictionData{GetPredictionData_Client_Character()};
+	const auto* Mesh{HasValidData() ? CharacterOwner->GetMesh() : nullptr};
 
-	if (NetworkSmoothingMode == ENetworkSmoothingMode::Disabled || !IsValid(Mesh) ||
-	    !Mesh->IsUsingAbsoluteRotation() || Mesh->IsSimulatingPhysics())
+	if (PredictionData != nullptr && IsValid(Mesh) && Mesh->IsUsingAbsoluteRotation())
 	{
-		Super::SmoothClientPosition(DeltaTime);
-		return;
+		// Calling Super::SmoothClientPosition() will change the mesh's rotation, which is undesirable when using
+		// absolute mesh rotation since we're manually updating the mesh's rotation from the animation instance. So,
+		// to keep the rotation unchanged, we simply override the predicted rotations with the mesh's current rotation.
+
+		const auto Rotation{Mesh->GetComponentQuat() * CharacterOwner->GetBaseRotationOffset().Inverse()};
+
+		PredictionData->OriginalMeshRotationOffset = Rotation;
+		PredictionData->MeshRotationOffset = Rotation;
+		PredictionData->MeshRotationTarget = Rotation;
 	}
 
-	// Ignore mesh rotation smoothing when using absolute mesh rotation because in this case ALS controls the mesh rotation itself.
-
-	const auto InitialRotation{Mesh->GetComponentQuat()};
-
 	Super::SmoothClientPosition(DeltaTime);
-
-	Mesh->SetWorldRotation(InitialRotation);
 }
 
 void UAlsCharacterMovementComponent::MoveAutonomous(const float ClientTimeStamp, const float DeltaTime,
@@ -618,7 +650,7 @@ void UAlsCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleLoca
 	{
 		// Only if the supplied sweep was vertical and downward.
 		if ((DownwardSweepResult->TraceStart.Z > DownwardSweepResult->TraceEnd.Z) &&
-			(DownwardSweepResult->TraceStart - DownwardSweepResult->TraceEnd).SizeSquared2D() <= KINDA_SMALL_NUMBER)
+			(DownwardSweepResult->TraceStart - DownwardSweepResult->TraceEnd).SizeSquared2D() <= UE_KINDA_SMALL_NUMBER)
 		{
 			// Reject hits that are barely on the cusp of the radius of the capsule
 			if (IsWithinEdgeTolerance(DownwardSweepResult->Location, DownwardSweepResult->ImpactPoint, PawnRadius))
@@ -676,7 +708,7 @@ void UAlsCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleLoca
 			{
 				// Use a capsule with a slightly smaller radius and shorter height to avoid the adjacent object.
 				// Capsule must not be nearly zero or the trace will fall back to a line trace from the start point and have the wrong length.
-				CapsuleShape.Capsule.Radius = FMath::Max(0.f, CapsuleShape.Capsule.Radius - SWEEP_EDGE_REJECT_DISTANCE - KINDA_SMALL_NUMBER);
+				CapsuleShape.Capsule.Radius = FMath::Max(0.f, CapsuleShape.Capsule.Radius - SWEEP_EDGE_REJECT_DISTANCE - UE_KINDA_SMALL_NUMBER);
 				if (!CapsuleShape.IsNearlyZero())
 				{
 					ShrinkHeight = (PawnHalfHeight - PawnRadius) * (1.f - ShrinkScaleOverlap);

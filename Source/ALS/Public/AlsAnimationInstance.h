@@ -1,6 +1,5 @@
 #pragma once
 
-#include "GameplayTagContainer.h"
 #include "Animation/AnimInstance.h"
 #include "State/AlsFeetState.h"
 #include "State/AlsGroundedState.h"
@@ -8,6 +7,7 @@
 #include "State/AlsLayeringState.h"
 #include "State/AlsLeanState.h"
 #include "State/AlsLocomotionAnimationState.h"
+#include "State/AlsMovementBaseState.h"
 #include "State/AlsPoseState.h"
 #include "State/AlsRagdollingAnimationState.h"
 #include "State/AlsRotateInPlaceState.h"
@@ -17,7 +17,6 @@
 #include "Utility/AlsGameplayTags.h"
 #include "AlsAnimationInstance.generated.h"
 
-class UAlsAnimationInstanceSettings;
 class AAlsCharacter;
 
 UCLASS()
@@ -37,14 +36,15 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
 	bool bPendingUpdate{true};
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
-	bool bTeleported;
+	// Time of the last teleportation event.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient, Meta = (ClampMin = 0))
+	float TeleportedTime;
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
 	bool bDisplayDebugTraces;
 
-	TArray<TFunction<void()>> DisplayDebugTracesQueue;
+	mutable TArray<TFunction<void()>> DisplayDebugTracesQueue;
 #endif
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
 	FGameplayTag ViewMode{AlsViewModeTags::ThirdPerson};
@@ -69,6 +69,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
 	FGameplayTag GroundedEntryMode;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
+	FAlsMovementBaseState MovementBase;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State", Transient)
 	FAlsLayeringState LayeringState;
@@ -128,7 +131,11 @@ protected:
 public:
 	void MarkPendingUpdate();
 
+	void MarkTeleported();
+
 private:
+	void RefreshMovementBaseOnGameThread();
+
 	void RefreshLayering();
 
 	void RefreshPose();
@@ -150,13 +157,13 @@ public:
 	void ReinitializeLookTowardsInput();
 
 	UFUNCTION(BlueprintCallable, Category = "ALS|Als Animation Instance", Meta = (BlueprintThreadSafe))
-	void RefreshLookTowardsInput(float DeltaTime);
+	void RefreshLookTowardsInput();
 
 	UFUNCTION(BlueprintCallable, Category = "ALS|Als Animation Instance", Meta = (BlueprintThreadSafe))
 	void ReinitializeLookTowardsCamera();
 
 	UFUNCTION(BlueprintCallable, Category = "ALS|Als Animation Instance", Meta = (BlueprintThreadSafe))
-	void RefreshLookTowardsCamera(float DeltaTime);
+	void RefreshLookTowardsCamera();
 
 	// Locomotion
 
@@ -292,10 +299,6 @@ private:
 public:
 	void StopRagdolling();
 
-public:
-	UFUNCTION(BlueprintCallable, Category = "ALS|Als Animation Instance")
-	void FinalizeRagdolling() const;
-
 	// Utility
 
 public:
@@ -310,6 +313,11 @@ inline UAlsAnimationInstanceSettings* UAlsAnimationInstance::GetSettingsUnsafe()
 inline void UAlsAnimationInstance::MarkPendingUpdate()
 {
 	bPendingUpdate |= true;
+}
+
+inline void UAlsAnimationInstance::MarkTeleported()
+{
+	TeleportedTime = GetWorld()->GetTimeSeconds();
 }
 
 inline void UAlsAnimationInstance::SetGroundedEntryMode(const FGameplayTag& NewGroundedEntryMode)

@@ -2,7 +2,6 @@
 
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Settings/AlsMovementSettings.h"
-#include "Utility/AlsGameplayTags.h"
 #include "AlsCharacterMovementComponent.generated.h"
 
 using FAlsPhysicsRotationDelegate = TMulticastDelegate<void(float DeltaTime)>;
@@ -121,6 +120,8 @@ public:
 	virtual void SetMovementMode(EMovementMode NewMovementMode, uint8 NewCustomMode = 0) override;
 
 	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
+
+	virtual void UpdateBasedRotation(FRotator& FinalRotation, const FRotator& ReducedRotation) override;
 
 	virtual float GetMaxAcceleration() const override;
 
