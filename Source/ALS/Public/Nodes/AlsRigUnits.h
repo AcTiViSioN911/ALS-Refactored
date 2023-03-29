@@ -4,7 +4,7 @@
 #include "AlsRigUnits.generated.h"
 
 USTRUCT(Meta = (Abstract, NodeColor = "0.05 0.25 0.05"))
-struct ALS_API FAlsRigUnit_MathBase : public FRigUnit
+struct ALS_API FAlsRigUnit_MathBase : public FRigUnitMutable
 {
 	GENERATED_BODY()
 };
@@ -16,7 +16,7 @@ struct ALS_API FAlsRigUnit_HighLevelBase : public FRigUnitMutable
 };
 
 USTRUCT(Meta = (Abstract, NodeColor = "0.25 0.05 0.05"))
-struct ALS_API FAlsRigUnit_SimulationBase : public FRigUnit
+struct ALS_API FAlsRigUnit_SimulationBase : public FRigUnitMutable
 {
 	GENERATED_BODY()
 };
@@ -61,9 +61,13 @@ public:
 	UPROPERTY(Transient)
 	FCachedRigElement CachedItemC;
 
+	UPROPERTY()
+	bool bIsInitialized{false};
 public:
 	RIGVM_METHOD()
-	virtual void Execute(const FRigUnitContext& Context) override;
+	virtual void Execute() override;
+
+	virtual void Initialize() override;
 };
 
 USTRUCT(DisplayName = "Exponential Decay (Vector)", Meta = (Category = "ALS"))
@@ -81,9 +85,13 @@ public:
 	UPROPERTY(Transient, Meta = (Output))
 	FVector Current{ForceInit};
 
+	UPROPERTY()
+	bool bIsInitialized{false};
 public:
 	RIGVM_METHOD()
-	virtual void Execute(const FRigUnitContext& Context) override;
+	virtual void Execute() override;
+
+	virtual void Initialize() override;
 };
 
 USTRUCT(DisplayName = "Hand Ik Retargeting", Meta = (Category = "ALS"))
@@ -132,7 +140,11 @@ public:
 	UPROPERTY(Transient)
 	TArray<FCachedRigElement> CachedBonesToMove;
 
+	UPROPERTY()
+	bool bIsInitialized{false};
 public:
 	RIGVM_METHOD()
-	virtual void Execute(const FRigUnitContext& Context) override;
+	virtual void Execute() override;
+
+	virtual void Initialize() override;
 };
